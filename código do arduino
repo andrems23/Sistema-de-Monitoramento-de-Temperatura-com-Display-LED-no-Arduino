@@ -1,0 +1,116 @@
+#include <DHT.h>
+#include <LedControl.h>
+
+#define DHTPIN 2
+#define DHTTYPE DHT11
+DHT dht(DHTPIN, DHTTYPE);
+
+#define DIN 11
+#define CS 10
+#define CLK 13
+#define NUM_DEVICES 4
+LedControl lc = LedControl(DIN, CLK, CS, NUM_DEVICES);
+
+// Fonte 8x8 de caracteres deitados (0-9, T, E, M, P, :, C)
+byte font[16][8] = {
+  {0x00,0x06,0x09,0x09,0x09,0x09,0x06,0x00}, // 0
+  {0x00,0x04,0x0C,0x04,0x04,0x04,0x0E,0x00}, // 1
+  {0x00,0x06,0x09,0x02,0x04,0x08,0x0F,0x00}, // 2
+  {0x00,0x06,0x09,0x02,0x01,0x09,0x06,0x00}, // 3
+  {0x00,0x02,0x06,0x0A,0x0F,0x02,0x03,0x00}, // 4
+  {0x00,0x0F,0x08,0x0E,0x01,0x09,0x06,0x00}, // 5
+  {0x00,0x06,0x08,0x0E,0x09,0x09,0x06,0x00}, // 6
+  {0x00,0x0F,0x01,0x02,0x04,0x04,0x04,0x00}, // 7
+  {0x00,0x06,0x09,0x06,0x09,0x09,0x06,0x00}, // 8
+  {0x00,0x06,0x09,0x07,0x01,0x09,0x06,0x00}, // 9
+  {0x00,0x7E,0x18,0x18,0x18,0x18,0x18,0x00}, // T
+  {0x00,0x0F,0x08,0x0E,0x08,0x08,0x0F,0x00}, // E
+  {0x00,0x09,0x0F,0x0F,0x0F,0x0F,0x09,0x00}, // M
+  {0x00,0x07C,0x42,0x42,0x07C,0x40,0x40,0x00}, // P
+  {0x00,0x3C,0x40,0x40,0x40,0x40,0x3C,0x00}, // C
+  {0x00,0x00,0x04,0x00,0x00,0x04,0x00,0x00}  // :
+};
+
+// Mapeia caracteres para índice da fonte
+int charMap(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c == 'T') return 10;
+  if (c == 'E') return 11;
+  if (c == 'M') return 12;
+  if (c == 'P') return 13;
+  if (c == 'C') return 14;
+  if (c == ':') return 15;
+  return 0;
+}
+
+// Espelha horizontalmente cada byte
+byte mirrorByte(byte b) {
+  byte r = 0;
+  for (int i = 0; i < 8; i++) {
+    if (b & (1 << i)) r |= (1 << (7 - i));
+  }
+  return r;
+}
+
+void setup() {
+  Serial.begin(9600);
+  dht.begin();
+  for (int i = 0; i < NUM_DEVICES; i++) {
+    lc.shutdown(i, false);
+    lc.setIntensity(i, 8);
+    lc.clearDisplay(i);
+  }
+}
+
+void loop() {
+  float temp = dht.readTemperature();
+  if (isnan(temp)) {
+    Serial.println("Erro ao ler DHT11!");
+    delay(2000);
+    return;
+  }
+
+  String msg = "TEMP:" + String((int)temp) + "C";
+  scrollMessage(msg);
+}
+
+// Scroll contínuo da esquerda para a direita
+void scrollMessage(String msg) {
+  int msgLength = msg.length();
+  int totalCols = msgLength * 8; // cada caractere = 8 colunas
+
+  // Buffer 8x128
+  byte buffer[8][128];
+  for (int r = 0; r < 8; r++)
+    for (int c = 0; c < totalCols; c++)
+      buffer[r][c] = 0;
+
+  // Preenche buffer na ordem invertida para scroll esquerda → direita
+  for (int i = 0; i < msgLength; i++) {
+    int idx = charMap(msg[msgLength - 1 - i]); // inverte a ordem dos caracteres
+    for (int row = 0; row < 8; row++) {
+      byte mirrored = mirrorByte(font[idx][row]);
+      for (int col = 0; col < 8; col++) {
+        if (mirrored & (1 << (7 - col))) buffer[row][i*8 + col] = 1;
+      }
+    }
+  }
+
+  // Scroll infinito da esquerda para a direita
+  int shift = totalCols - 32; // começa fora da tela à direita
+  while (true) {
+    for (int device = 0; device < NUM_DEVICES; device++) { // ordem natural dos módulos
+      for (int row = 0; row < 8; row++) {
+        byte value = 0;
+        for (int col = 0; col < 8; col++) {
+          int bufferCol = col + device*8 + shift;
+          if (bufferCol >= 0 && bufferCol < totalCols) value |= (buffer[row][bufferCol] << col);
+        }
+        lc.setRow(device, row, value);
+      }
+    }
+    shift--;
+    if (shift < 0) shift = totalCols - 32; // loop infinito
+    delay(150);
+  }
+}
